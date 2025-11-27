@@ -142,7 +142,63 @@ jobs:
 
           cat report.md >> $GITHUB_STEP_SUMMARY
 
-      - name: Comment on PR
+      - name: Post inline review comments
+        if: always() && github.event_name == 'pull_request' && hashFiles('semgrep-results.json') != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            if (!fs.existsSync('semgrep-results.json')) return;
+
+            const results = JSON.parse(fs.readFileSync('semgrep-results.json', 'utf8'));
+            if (!results.results || results.results.length === 0) return;
+
+            // Get the PR's changed files
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+            const changedFiles = new Set(files.map(f => f.filename));
+
+            // Build review comments for findings in changed files only
+            const comments = [];
+            for (const finding of results.results) {
+              if (!changedFiles.has(finding.path)) continue;
+
+              const severity = finding.extra.severity === 'ERROR' ? '🔴 High' :
+                               finding.extra.severity === 'WARNING' ? '🟡 Medium' : '🟢 Low';
+              const ruleName = finding.check_id.split('.').pop();
+
+              let body = `### 🔒 ${ruleName}\n\n`;
+              body += `**Severity:** ${severity}\n\n`;
+              body += `${finding.extra.message}\n\n`;
+              body += `---\n*Semgrep Security Scan*`;
+
+              comments.push({
+                path: finding.path,
+                line: finding.end.line,
+                body: body
+              });
+            }
+
+            if (comments.length === 0) return;
+
+            // Submit as a review
+            try {
+              await github.rest.pulls.createReview({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                event: 'COMMENT',
+                comments: comments
+              });
+            } catch (e) {
+              console.log('Could not post inline comments:', e.message);
+            }
+
+      - name: Comment summary on PR
         if: always() && github.event_name == 'pull_request' && hashFiles('report.md') != ''
         uses: actions/github-script@v7
         with:
