@@ -45,14 +45,12 @@ jobs:
             BRANCH="${{ github.sha }}"
           fi
 
-          # Run TruffleHog (scan for all secrets, not just verified)
+          # Run TruffleHog - scan filesystem instead of git history for reliability
           docker run --rm -v "$PWD:/tmp" -w /tmp \
             ghcr.io/trufflesecurity/trufflehog:latest \
-            git file:///tmp/ \
-            --since-commit=$SINCE_COMMIT \
-            --branch=$BRANCH \
+            filesystem /tmp/ \
             --json \
-            --no-update --github-actions > results.json 2>&1 || true
+            --no-update > results.json 2>&1 || true
 
           # Process results
           if [ -f "results.json" ] && [ -s "results.json" ]; then
