@@ -114,29 +114,17 @@ jobs:
           if [ "$TOTAL" -eq 0 ]; then
             echo "✅ **All clear!** No security issues found." >> report.md
           else
-            echo "⚠️ Found **$TOTAL** potential security issue(s):" >> report.md
+            echo "⚠️ Found **$TOTAL** potential security issue(s). See inline comments for details." >> report.md
             echo "" >> report.md
             echo "| Severity | Count |" >> report.md
             echo "|----------|-------|" >> report.md
             echo "| 🔴 High | $HIGH |" >> report.md
             echo "| 🟡 Medium | $MEDIUM |" >> report.md
             echo "| 🟢 Low | $LOW |" >> report.md
-            echo "" >> report.md
-            echo "---" >> report.md
-            echo "" >> report.md
-
-            if [ -f semgrep-results.json ]; then
-              jq -r '.results[] | "### \(if .extra.severity == "ERROR" then "🔴" elif .extra.severity == "WARNING" then "🟡" else "🟢" end) \(.check_id | split(".") | last)\n📁 **`\(.path)`** at line **\(.start.line)**\n\n\(.extra.message)\n\n---\n"' semgrep-results.json >> report.md 2>/dev/null || true
-            fi
-
-            echo "" >> report.md
-            echo "⚡ **Action required:** Review and fix the issues above before merging." >> report.md
 
             if [ "${{ steps.semgrep.outputs.has_high_severity }}" == "true" ] && [ "${{ inputs.block_on_high }}" == "true" ]; then
               echo "" >> report.md
-              echo "---" >> report.md
-              echo "" >> report.md
-              echo "> **This PR is blocked due to HIGH/CRITICAL severity findings. Please fix them before merging.**" >> report.md
+              echo "> ⛔ **This PR is blocked due to HIGH severity findings.**" >> report.md
             fi
           fi
 
