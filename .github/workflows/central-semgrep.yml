@@ -56,38 +56,22 @@ jobs:
             .
 
           if [ -f semgrep-results.json ]; then
-            TOTAL=$(jq '.results | length' semgrep-results.json 2>/dev/null || echo "0")
-            CRITICAL=$(jq '[.results[] | select(.extra.severity == "ERROR")] | length' semgrep-results.json 2>/dev/null || echo "0")
-            HIGH=$CRITICAL
-            MEDIUM=$(jq '[.results[] | select(.extra.severity == "WARNING")] | length' semgrep-results.json 2>/dev/null || echo "0")
-            LOW=$(jq '[.results[] | select(.extra.severity == "INFO")] | length' semgrep-results.json 2>/dev/null || echo "0")
+            # Only count HIGH/CRITICAL (ERROR severity)
+            HIGH=$(jq '[.results[] | select(.extra.severity == "ERROR")] | length' semgrep-results.json 2>/dev/null || echo "0")
+
+            # Filter results to only HIGH severity
+            jq '[.results[] | select(.extra.severity == "ERROR")]' semgrep-results.json > high-only.json 2>/dev/null
+            mv high-only.json semgrep-results.json
           else
-            TOTAL=0
-            CRITICAL=0
             HIGH=0
-            MEDIUM=0
-            LOW=0
           fi
 
-          echo "total=$TOTAL" >> $GITHUB_OUTPUT
-          echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
           echo "high=$HIGH" >> $GITHUB_OUTPUT
-          echo "medium=$MEDIUM" >> $GITHUB_OUTPUT
-          echo "low=$LOW" >> $GITHUB_OUTPUT
 
-          HIGH_SEVERITY_COUNT=$((CRITICAL))
-          echo "high_severity_count=$HIGH_SEVERITY_COUNT" >> $GITHUB_OUTPUT
-
-          if [ "$TOTAL" -gt 0 ]; then
+          if [ "$HIGH" -gt 0 ]; then
             echo "has_findings=true" >> $GITHUB_OUTPUT
           else
             echo "has_findings=false" >> $GITHUB_OUTPUT
-          fi
-
-          if [ "$HIGH_SEVERITY_COUNT" -gt 0 ]; then
-            echo "has_high_severity=true" >> $GITHUB_OUTPUT
-          else
-            echo "has_high_severity=false" >> $GITHUB_OUTPUT
           fi
 
       - name: Upload SARIF to GitHub Security
@@ -102,27 +86,17 @@ jobs:
         id: report
         if: always() && (hashFiles('semgrep-results.sarif') != '' || hashFiles('semgrep-results.json') != '')
         run: |
-          TOTAL=${{ steps.semgrep.outputs.total }}
-          CRITICAL=${{ steps.semgrep.outputs.critical }}
           HIGH=${{ steps.semgrep.outputs.high }}
-          MEDIUM=${{ steps.semgrep.outputs.medium }}
-          LOW=${{ steps.semgrep.outputs.low }}
 
           echo "## 🔒 Semgrep Security Scan" > report.md
           echo "" >> report.md
 
-          if [ "$TOTAL" -eq 0 ]; then
-            echo "✅ **All clear!** No security issues found." >> report.md
+          if [ "$HIGH" -eq 0 ]; then
+            echo "✅ **All clear!** No HIGH/CRITICAL security issues found." >> report.md
           else
-            echo "⚠️ Found **$TOTAL** potential security issue(s). See inline comments for details." >> report.md
-            echo "" >> report.md
-            echo "| Severity | Count |" >> report.md
-            echo "|----------|-------|" >> report.md
-            echo "| 🔴 High | $HIGH |" >> report.md
-            echo "| 🟡 Medium | $MEDIUM |" >> report.md
-            echo "| 🟢 Low | $LOW |" >> report.md
+            echo "🔴 Found **$HIGH** HIGH/CRITICAL security issue(s). See inline comments for details." >> report.md
 
-            if [ "${{ steps.semgrep.outputs.has_high_severity }}" == "true" ] && [ "${{ inputs.block_on_high }}" == "true" ]; then
+            if [ "${{ inputs.block_on_high }}" == "true" ]; then
               echo "" >> report.md
               echo "> ⛔ **This PR is blocked due to HIGH severity findings.**" >> report.md
             fi
@@ -140,7 +114,7 @@ jobs:
             if (!fs.existsSync('semgrep-results.json')) return;
 
             const results = JSON.parse(fs.readFileSync('semgrep-results.json', 'utf8'));
-            if (!results.results || results.results.length === 0) return;
+            if (!results || results.length === 0) return;
 
             // Get the PR's changed files
             const { data: files } = await github.rest.pulls.listFiles({
@@ -150,35 +124,23 @@ jobs:
             });
             const changedFiles = new Set(files.map(f => f.filename));
 
-            // Build review comments for findings in changed files only
+            // Build review comments for HIGH severity findings in changed files only
             const comments = [];
-            for (const finding of results.results) {
+            for (const finding of results) {
               if (!changedFiles.has(finding.path)) continue;
 
-              const severityOrder = finding.extra.severity === 'ERROR' ? 0 :
-                                    finding.extra.severity === 'WARNING' ? 1 : 2;
-              const severity = finding.extra.severity === 'ERROR' ? '🔴 High' :
-                               finding.extra.severity === 'WARNING' ? '🟡 Medium' : '🟢 Low';
               const ruleName = finding.check_id.split('.').pop();
 
-              let body = `### 🔒 ${ruleName}\n\n`;
-              body += `**Severity:** ${severity}\n\n`;
+              let body = `### 🔴 ${ruleName}\n\n`;
               body += `${finding.extra.message}\n\n`;
               body += `---\n*Semgrep Security Scan*`;
 
               comments.push({
                 path: finding.path,
                 line: finding.end.line,
-                body: body,
-                severityOrder: severityOrder
+                body: body
               });
             }
-
-            // Sort by severity (High first, then Medium, then Low)
-            comments.sort((a, b) => a.severityOrder - b.severityOrder);
-
-            // Remove severityOrder before sending to API
-            comments.forEach(c => delete c.severityOrder);
 
             if (comments.length === 0) return;
 
@@ -242,14 +204,9 @@ jobs:
           if-no-files-found: ignore
 
       - name: Block on HIGH/CRITICAL severity (if enabled)
-        if: inputs.block_on_high == true && steps.semgrep.outputs.has_high_severity == 'true'
+        if: inputs.block_on_high == true && steps.semgrep.outputs.has_findings == 'true'
         run: |
-          echo "HIGH/CRITICAL severity vulnerabilities found."
+          echo "🔴 HIGH/CRITICAL severity vulnerabilities found: ${{ steps.semgrep.outputs.high }}"
           echo ""
-          echo "Summary:"
-          echo "  - High: ${{ steps.semgrep.outputs.high }}"
-          echo "  - Medium: ${{ steps.semgrep.outputs.medium }}"
-          echo "  - Low: ${{ steps.semgrep.outputs.low }}"
-          echo ""
-          echo "Please fix the HIGH/CRITICAL issues before merging."
+          echo "Please fix all HIGH severity issues before merging."
           exit 1
