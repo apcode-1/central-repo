@@ -45,13 +45,13 @@ jobs:
             BRANCH="${{ github.sha }}"
           fi
 
-          # Run TruffleHog
+          # Run TruffleHog (scan for all secrets, not just verified)
           docker run --rm -v "$PWD:/tmp" -w /tmp \
             ghcr.io/trufflesecurity/trufflehog:latest \
             git file:///tmp/ \
             --since-commit=$SINCE_COMMIT \
             --branch=$BRANCH \
-            --only-verified --json \
+            --json \
             --no-update --github-actions > results.json 2>&1 || true
 
           # Process results
@@ -89,39 +89,26 @@ jobs:
           echo "" >> report.md
 
           if [ "$FINDINGS" -eq 0 ]; then
-            echo "All good! No secrets were detected in this change." >> report.md
+            echo "✅ **All clear!** No secrets detected." >> report.md
           else
-            echo "Found **$FINDINGS** potential secret(s) ($VERIFIED verified)." >> report.md
+            echo "⚠️ Found **$FINDINGS** potential secret(s)." >> report.md
             echo "" >> report.md
-
-            if [ "$VERIFIED" -gt 0 ]; then
-              echo "### Verified Secrets" >> report.md
-              echo "" >> report.md
-              jq -r '.[] | select(.Verified == true) | "- **\(.DetectorName)** in `\(.SourceMetadata.Data.Git.file // "unknown"):\(.SourceMetadata.Data.Git.line // "?")`"' results.json >> report.md 2>/dev/null || true
-              echo "" >> report.md
-            fi
-
-            echo "---" >> report.md
+            echo "| Type | File | Status |" >> report.md
+            echo "|------|------|--------|" >> report.md
+            jq -r '.[] | "| \(.DetectorName) | `\(.SourceMetadata.Data.Git.file // "unknown"):\(.SourceMetadata.Data.Git.line // "?")` | \(if .Verified then "🔴 Verified" else "🟡 Potential" end) |"' results.json >> report.md 2>/dev/null || true
             echo "" >> report.md
-            echo "### What to do next" >> report.md
-            echo "" >> report.md
-            echo "1. **Rotate the secret immediately** - assume it's compromised" >> report.md
-            echo "2. Remove the secret from code" >> report.md
-            echo "3. Use environment variables or a secrets manager" >> report.md
-            echo "4. Check git history - secret may still exist in old commits" >> report.md
+            echo "**Action required:** Remove secrets and rotate credentials." >> report.md
 
             if [ "${{ inputs.block_on_secrets }}" == "true" ] && [ "$VERIFIED" -gt 0 ]; then
               echo "" >> report.md
-              echo "---" >> report.md
-              echo "" >> report.md
-              echo "> **This PR is blocked due to verified secrets. Please remove them before merging.**" >> report.md
+              echo "> ⛔ **This PR is blocked due to verified secrets.**" >> report.md
             fi
           fi
 
           cat report.md >> $GITHUB_STEP_SUMMARY
 
       - name: Comment on PR
-        if: always() && github.event_name == 'pull_request' && steps.trufflehog.outputs.has_secrets == 'true'
+        if: always() && github.event_name == 'pull_request' && steps.trufflehog.outputs.findings != '0'
         uses: actions/github-script@v7
         with:
           script: |

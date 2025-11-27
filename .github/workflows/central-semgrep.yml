@@ -155,6 +155,8 @@ jobs:
             for (const finding of results.results) {
               if (!changedFiles.has(finding.path)) continue;
 
+              const severityOrder = finding.extra.severity === 'ERROR' ? 0 :
+                                    finding.extra.severity === 'WARNING' ? 1 : 2;
               const severity = finding.extra.severity === 'ERROR' ? '🔴 High' :
                                finding.extra.severity === 'WARNING' ? '🟡 Medium' : '🟢 Low';
               const ruleName = finding.check_id.split('.').pop();
@@ -167,9 +169,16 @@ jobs:
               comments.push({
                 path: finding.path,
                 line: finding.end.line,
-                body: body
+                body: body,
+                severityOrder: severityOrder
               });
             }
+
+            // Sort by severity (High first, then Medium, then Low)
+            comments.sort((a, b) => a.severityOrder - b.severityOrder);
+
+            // Remove severityOrder before sending to API
+            comments.forEach(c => delete c.severityOrder);
 
             if (comments.length === 0) return;
 
