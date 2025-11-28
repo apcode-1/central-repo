@@ -164,15 +164,11 @@ jobs:
 
               const severity = finding.Verified ? 'CRITICAL' : 'HIGH';
               const detector = finding.DetectorName || 'Unknown';
+              const message = finding.Verified
+                ? 'This is a **verified, working credential**. Rotate immediately!'
+                : 'Potential secret detected. Review and remove if real.';
 
-              const body = `### **Severity: ${severity}** - ${detector}
-
-${finding.Verified ?
-  'This is a **verified, working credential**. Rotate immediately!' :
-  'Potential secret detected. Review and remove if real.'}
-
----
-*TruffleHog Security Scan*`;
+              const body = `### **Severity: ${severity}** - ${detector}\n\n${message}\n\n---\n*TruffleHog Security Scan*`;
 
               comments.push({
                 path: filePath,
