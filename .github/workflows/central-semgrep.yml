@@ -139,7 +139,7 @@ jobs:
 
               const ruleName = finding.check_id.split('.').pop();
 
-              let body = `### 🔴 ${ruleName}\n\n`;
+              let body = `### **Severity: HIGH** - ${ruleName}\n\n`;
               body += `${finding.extra.message}\n\n`;
               body += `---\n*Semgrep Security Scan*`;
 
