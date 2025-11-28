@@ -35,17 +35,16 @@ jobs:
         run: |
           set +e
 
-          # Run TruffleHog - detect all secrets (verified + unverified)
-          # Separate stdout (JSON) from stderr (logs)
-          docker run --rm -v "$PWD:/tmp" -w /tmp \
+          # Run TruffleHog on the actual repo directory (not /tmp)
+          docker run --rm -v "$PWD:/repo" \
             ghcr.io/trufflesecurity/trufflehog:latest \
-            filesystem /tmp/ \
+            filesystem /repo \
             --no-update \
             --no-filter-unverified \
             --results=verified,unverified,unknown \
             --json 2>/dev/null > raw_results.json || true
 
-          # Filter only valid JSON lines (TruffleHog outputs one JSON object per line)
+          # Filter only valid JSON lines
           if [ -f "raw_results.json" ] && [ -s "raw_results.json" ]; then
             grep '^\s*{' raw_results.json > results_lines.json 2>/dev/null || true
             if [ -s "results_lines.json" ]; then
@@ -64,7 +63,8 @@ jobs:
           echo "findings=$FINDINGS" >> $GITHUB_OUTPUT
           echo "verified=$VERIFIED" >> $GITHUB_OUTPUT
 
-          if [ "$VERIFIED" -gt 0 ]; then
+          # Trigger notifications if ANY secrets found (not just verified)
+          if [ "$FINDINGS" -gt 0 ]; then
             echo "has_secrets=true" >> $GITHUB_OUTPUT
           else
             echo "has_secrets=false" >> $GITHUB_OUTPUT
@@ -78,7 +78,7 @@ jobs:
           FINDINGS=${{ steps.trufflehog.outputs.findings }}
           VERIFIED=${{ steps.trufflehog.outputs.verified }}
 
-          echo "## Secret Scan Results" > report.md
+          echo "## 🔐 TruffleHog Secret Scan" > report.md
           echo "" >> report.md
 
           if [ "$FINDINGS" -eq 0 ]; then
@@ -86,9 +86,9 @@ jobs:
           else
             echo "⚠️ Found **$FINDINGS** potential secret(s) ($VERIFIED verified)." >> report.md
             echo "" >> report.md
-            echo "| Type | File | Status |" >> report.md
-            echo "|------|------|--------|" >> report.md
-            jq -r '.[] | "| \(.DetectorName) | `\(.SourceMetadata.Data.Filesystem.file // .SourceMetadata.Data.Git.file // "unknown"):\(.SourceMetadata.Data.Filesystem.line // .SourceMetadata.Data.Git.line // "?")` | \(if .Verified then "🔴 Verified" else "🟡 Unverified" end) |"' results.json >> report.md 2>/dev/null || true
+            echo "| Type | File | Line | Status |" >> report.md
+            echo "|------|------|------|--------|" >> report.md
+            jq -r '.[] | "| \(.DetectorName) | `\(.SourceMetadata.Data.Filesystem.file // .SourceMetadata.Data.Git.file // "unknown" | gsub("/repo/"; ""))` | \(.SourceMetadata.Data.Filesystem.line // .SourceMetadata.Data.Git.line // "?") | \(if .Verified then "🔴 Verified" else "🟡 Unverified" end) |"' results.json >> report.md 2>/dev/null || true
             echo "" >> report.md
             echo "**Action required:** Review and rotate any real credentials." >> report.md
 
@@ -100,8 +100,122 @@ jobs:
 
           cat report.md >> $GITHUB_STEP_SUMMARY
 
-      - name: Comment on PR
+      - name: Post inline review comments
         if: always() && github.event_name == 'pull_request' && steps.trufflehog.outputs.findings != '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const results = JSON.parse(fs.readFileSync('results.json', 'utf8'));
+
+            if (results.length === 0) {
+              console.log('No findings to comment on');
+              return;
+            }
+
+            // Get the PR diff to find valid comment positions
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+
+            const changedFiles = new Map();
+            for (const file of files) {
+              changedFiles.set(file.filename, file);
+            }
+
+            // Get existing review comments to avoid duplicates
+            const { data: existingComments } = await github.rest.pulls.listReviewComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+
+            const existingKeys = new Set(
+              existingComments
+                .filter(c => c.body.includes('TruffleHog'))
+                .map(c => `${c.path}:${c.line || c.original_line}`)
+            );
+
+            // Post inline comments for each finding
+            const comments = [];
+            for (const finding of results) {
+              const filePath = (finding.SourceMetadata?.Data?.Filesystem?.file ||
+                               finding.SourceMetadata?.Data?.Git?.file || '').replace('/repo/', '');
+              const line = finding.SourceMetadata?.Data?.Filesystem?.line ||
+                          finding.SourceMetadata?.Data?.Git?.line || 1;
+
+              if (!filePath || !changedFiles.has(filePath)) {
+                console.log(`Skipping ${filePath}:${line} - not in PR diff`);
+                continue;
+              }
+
+              const key = `${filePath}:${line}`;
+              if (existingKeys.has(key)) {
+                console.log(`Skipping ${key} - already commented`);
+                continue;
+              }
+
+              const status = finding.Verified ? '🔴 **VERIFIED SECRET**' : '🟡 Potential Secret';
+              const detector = finding.DetectorName || 'Unknown';
+
+              const body = `### ${status}
+
+            **🔐 TruffleHog Detection**
+
+            | Field | Value |
+            |-------|-------|
+            | Type | \`${detector}\` |
+            | Verified | ${finding.Verified ? 'Yes - This secret is valid!' : 'No - Needs review'} |
+
+            ${finding.Verified ?
+              '⚠️ **This is a verified, working credential. Rotate immediately!**' :
+              '⚠️ Review this potential secret and remove if real.'}`;
+
+              comments.push({
+                path: filePath,
+                line: parseInt(line),
+                body: body
+              });
+
+              existingKeys.add(key);
+            }
+
+            // Post comments via review
+            if (comments.length > 0) {
+              try {
+                await github.rest.pulls.createReview({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: context.issue.number,
+                  event: 'COMMENT',
+                  comments: comments
+                });
+                console.log(`Posted ${comments.length} inline comments`);
+              } catch (error) {
+                console.log('Error posting review:', error.message);
+                // Fall back to individual comments if review fails
+                for (const comment of comments) {
+                  try {
+                    await github.rest.pulls.createReviewComment({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      pull_number: context.issue.number,
+                      commit_id: context.payload.pull_request.head.sha,
+                      path: comment.path,
+                      line: comment.line,
+                      body: comment.body
+                    });
+                  } catch (e) {
+                    console.log(`Could not comment on ${comment.path}:${comment.line}: ${e.message}`);
+                  }
+                }
+              }
+            }
+
+      - name: Comment summary on PR
+        if: always() && github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
@@ -115,7 +229,7 @@ jobs:
             });
 
             const botComment = comments.find(c =>
-              c.user.type === 'Bot' && c.body.includes('Secret Scan Results')
+              c.user.type === 'Bot' && c.body.includes('TruffleHog Secret Scan')
             );
 
             if (botComment) {
@@ -163,13 +277,15 @@ jobs:
           curl -X POST -H 'Content-type: application/json' \
             --data "{
               \"attachments\": [{
-                \"color\": \"#ff0000\",
-                \"title\": \"Secret Detected in $REPO\",
+                \"color\": \"#ff9900\",
+                \"title\": \"🔐 Secrets Detected in $REPO\",
                 \"title_link\": \"$RUN_URL\",
-                \"text\": \"Found $VERIFIED verified secret(s)\",
+                \"text\": \"Found $FINDINGS potential secret(s) ($VERIFIED verified)\",
                 \"fields\": [
                   {\"title\": \"Repository\", \"value\": \"$REPO\", \"short\": true},
-                  {\"title\": \"Triggered by\", \"value\": \"${{ github.actor }}\", \"short\": true}
+                  {\"title\": \"Triggered by\", \"value\": \"${{ github.actor }}\", \"short\": true},
+                  {\"title\": \"Total Findings\", \"value\": \"$FINDINGS\", \"short\": true},
+                  {\"title\": \"Verified\", \"value\": \"$VERIFIED\", \"short\": true}
                 ],
                 \"footer\": \"TruffleHog Security Scan\"
               }]
@@ -177,7 +293,7 @@ jobs:
             "$SLACK_WEBHOOK_URL"
 
       - name: Block on verified secrets (if enabled)
-        if: inputs.block_on_secrets == true && steps.trufflehog.outputs.has_secrets == 'true'
+        if: inputs.block_on_secrets == true && steps.trufflehog.outputs.verified != '0'
         run: |
           echo "Verified secrets found in this PR!"
           echo ""
