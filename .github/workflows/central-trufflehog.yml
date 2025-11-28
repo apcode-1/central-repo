@@ -30,33 +30,19 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Fetch custom config
-        run: |
-          curl -sSL https://raw.githubusercontent.com/apcode-1/central-repo/main/.github/trufflehog-config.yaml \
-            -o trufflehog-config.yaml
-
       - name: Run TruffleHog
         id: trufflehog
         run: |
           set +e
 
-          # Determine scan range based on event type
-          if [ "${{ github.event_name }}" == "pull_request" ]; then
-            SINCE_COMMIT="${{ github.event.pull_request.base.sha }}"
-            BRANCH="${{ github.event.pull_request.head.sha }}"
-          else
-            # For push events, scan last commit
-            SINCE_COMMIT="${{ github.event.before }}"
-            BRANCH="${{ github.sha }}"
-          fi
-
-          # Run TruffleHog with custom detectors
+          # Run TruffleHog - detect all secrets (verified + unverified)
           docker run --rm -v "$PWD:/tmp" -w /tmp \
             ghcr.io/trufflesecurity/trufflehog:latest \
             filesystem /tmp/ \
-            --config /tmp/trufflehog-config.yaml \
-            --json \
-            --no-update > results.json 2>&1 || true
+            --no-update \
+            --no-filter-unverified \
+            --results=verified,unverified,unknown \
+            --json > results.json 2>&1 || true
 
           # Process results
           if [ -f "results.json" ] && [ -s "results.json" ]; then
@@ -95,13 +81,13 @@ jobs:
           if [ "$FINDINGS" -eq 0 ]; then
             echo "✅ **All clear!** No secrets detected." >> report.md
           else
-            echo "⚠️ Found **$FINDINGS** potential secret(s)." >> report.md
+            echo "⚠️ Found **$FINDINGS** potential secret(s) ($VERIFIED verified)." >> report.md
             echo "" >> report.md
             echo "| Type | File | Status |" >> report.md
             echo "|------|------|--------|" >> report.md
-            jq -r '.[] | "| \(.DetectorName) | `\(.SourceMetadata.Data.Git.file // "unknown"):\(.SourceMetadata.Data.Git.line // "?")` | \(if .Verified then "🔴 Verified" else "🟡 Potential" end) |"' results.json >> report.md 2>/dev/null || true
+            jq -r '.[] | "| \(.DetectorName) | `\(.SourceMetadata.Data.Filesystem.file // .SourceMetadata.Data.Git.file // "unknown"):\(.SourceMetadata.Data.Filesystem.line // .SourceMetadata.Data.Git.line // "?")` | \(if .Verified then "🔴 Verified" else "🟡 Unverified" end) |"' results.json >> report.md 2>/dev/null || true
             echo "" >> report.md
-            echo "**Action required:** Remove secrets and rotate credentials." >> report.md
+            echo "**Action required:** Review and rotate any real credentials." >> report.md
 
             if [ "${{ inputs.block_on_secrets }}" == "true" ] && [ "$VERIFIED" -gt 0 ]; then
               echo "" >> report.md
