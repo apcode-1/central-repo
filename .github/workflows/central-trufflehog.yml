@@ -30,6 +30,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Fetch custom config
+        run: |
+          curl -sSL https://raw.githubusercontent.com/apcode-1/central-repo/main/.github/trufflehog-config.yaml \
+            -o trufflehog-config.yaml
+
       - name: Run TruffleHog
         id: trufflehog
         run: |
@@ -45,10 +50,11 @@ jobs:
             BRANCH="${{ github.sha }}"
           fi
 
-          # Run TruffleHog - scan filesystem instead of git history for reliability
+          # Run TruffleHog with custom detectors
           docker run --rm -v "$PWD:/tmp" -w /tmp \
             ghcr.io/trufflesecurity/trufflehog:latest \
             filesystem /tmp/ \
+            --config /tmp/trufflehog-config.yaml \
             --json \
             --no-update > results.json 2>&1 || true
 
