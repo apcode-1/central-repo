@@ -36,19 +36,22 @@ jobs:
           set +e
 
           # Run TruffleHog - detect all secrets (verified + unverified)
+          # Separate stdout (JSON) from stderr (logs)
           docker run --rm -v "$PWD:/tmp" -w /tmp \
             ghcr.io/trufflesecurity/trufflehog:latest \
             filesystem /tmp/ \
             --no-update \
             --no-filter-unverified \
             --results=verified,unverified,unknown \
-            --json > results.json 2>&1 || true
+            --json 2>/dev/null > raw_results.json || true
 
-          # Process results
-          if [ -f "results.json" ] && [ -s "results.json" ]; then
-            # Convert newline-separated JSON to array if needed
-            if ! jq -e 'type == "array"' results.json >/dev/null 2>&1; then
-              jq -s '.' results.json > temp.json && mv temp.json results.json 2>/dev/null || echo "[]" > results.json
+          # Filter only valid JSON lines (TruffleHog outputs one JSON object per line)
+          if [ -f "raw_results.json" ] && [ -s "raw_results.json" ]; then
+            grep '^\s*{' raw_results.json > results_lines.json 2>/dev/null || true
+            if [ -s "results_lines.json" ]; then
+              jq -s '.' results_lines.json > results.json 2>/dev/null || echo "[]" > results.json
+            else
+              echo "[]" > results.json
             fi
           else
             echo "[]" > results.json
