@@ -162,21 +162,17 @@ jobs:
                 continue;
               }
 
-              const status = finding.Verified ? '🔴 **VERIFIED SECRET**' : '🟡 Potential Secret';
+              const severity = finding.Verified ? 'CRITICAL' : 'HIGH';
               const detector = finding.DetectorName || 'Unknown';
 
-              const body = `### ${status}
+              const body = `### **Severity: ${severity}** - ${detector}
 
-            **🔐 TruffleHog Detection**
+${finding.Verified ?
+  'This is a **verified, working credential**. Rotate immediately!' :
+  'Potential secret detected. Review and remove if real.'}
 
-            | Field | Value |
-            |-------|-------|
-            | Type | \`${detector}\` |
-            | Verified | ${finding.Verified ? 'Yes - This secret is valid!' : 'No - Needs review'} |
-
-            ${finding.Verified ?
-              '⚠️ **This is a verified, working credential. Rotate immediately!**' :
-              '⚠️ Review this potential secret and remove if real.'}`;
+---
+*TruffleHog Security Scan*`;
 
               comments.push({
                 path: filePath,
