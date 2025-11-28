@@ -29,6 +29,12 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Fetch custom rules
+        run: |
+          mkdir -p .semgrep-rules
+          curl -sSL https://raw.githubusercontent.com/apcode-1/central-repo/main/.github/semgrep-rules/hardcoded-secrets.yaml \
+            -o .semgrep-rules/hardcoded-secrets.yaml
+
       - name: Run Semgrep scan
         id: semgrep
         run: |
@@ -40,6 +46,7 @@ jobs:
             --config p/trailofbits \
             --config p/owasp-top-ten \
             --config p/secrets \
+            --config .semgrep-rules/ \
             --json \
             --output semgrep-results.json \
             .
@@ -51,6 +58,7 @@ jobs:
             --config p/trailofbits \
             --config p/owasp-top-ten \
             --config p/secrets \
+            --config .semgrep-rules/ \
             --sarif \
             --output semgrep-results.sarif \
             .
