@@ -45,11 +45,15 @@ jobs:
             --exclude-paths=/repo/.git \
             --json 2>/dev/null > raw_results.json || true
 
-          # Filter only valid JSON lines
+          # Filter valid JSON lines and exclude .git findings (GH Actions token false positive)
           if [ -f "raw_results.json" ] && [ -s "raw_results.json" ]; then
             grep '^\s*{' raw_results.json > results_lines.json 2>/dev/null || true
             if [ -s "results_lines.json" ]; then
-              jq -s '.' results_lines.json > results.json 2>/dev/null || echo "[]" > results.json
+              # Parse and filter out .git directory findings
+              jq -s '[.[] | select(
+                (.SourceMetadata.Data.Filesystem.file // "" | contains(".git/") | not) and
+                (.SourceMetadata.Data.Git.file // "" | contains(".git/") | not)
+              )]' results_lines.json > results.json 2>/dev/null || echo "[]" > results.json
             else
               echo "[]" > results.json
             fi
