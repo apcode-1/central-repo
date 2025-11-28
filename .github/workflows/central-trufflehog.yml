@@ -265,19 +265,27 @@ jobs:
           if-no-files-found: ignore
 
       - name: Send Slack notification
-        if: always() && steps.trufflehog.outputs.has_secrets == 'true'
+        if: always()
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
-          if [ -z "$SLACK_WEBHOOK_URL" ]; then
-            echo "Slack webhook not configured, skipping notification"
+          FINDINGS=${{ steps.trufflehog.outputs.findings }}
+          VERIFIED=${{ steps.trufflehog.outputs.verified }}
+
+          # Check if we have findings and webhook configured
+          if [ "$FINDINGS" -eq 0 ] || [ -z "$SLACK_WEBHOOK_URL" ]; then
+            if [ -z "$SLACK_WEBHOOK_URL" ]; then
+              echo "Slack webhook not configured, skipping notification"
+            else
+              echo "No secrets found - skipping Slack notification"
+            fi
             exit 0
           fi
 
-          FINDINGS=${{ steps.trufflehog.outputs.findings }}
-          VERIFIED=${{ steps.trufflehog.outputs.verified }}
           REPO="${{ github.repository }}"
           RUN_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          echo "Sending Slack notification for $FINDINGS findings..."
 
           curl -X POST -H 'Content-type: application/json' \
             --data "{
@@ -296,6 +304,8 @@ jobs:
               }]
             }" \
             "$SLACK_WEBHOOK_URL"
+
+          echo "Slack notification sent successfully"
 
       - name: Block on verified secrets (if enabled)
         if: inputs.block_on_secrets == true && steps.trufflehog.outputs.verified != '0'
