@@ -35,13 +35,14 @@ jobs:
         run: |
           set +e
 
-          # Run TruffleHog on the actual repo directory (not /tmp)
+          # Run TruffleHog on repo, excluding .git directory (contains GH Actions token)
           docker run --rm -v "$PWD:/repo" \
             ghcr.io/trufflesecurity/trufflehog:latest \
             filesystem /repo \
             --no-update \
             --no-filter-unverified \
             --results=verified,unverified,unknown \
+            --exclude-paths=/repo/.git \
             --json 2>/dev/null > raw_results.json || true
 
           # Filter only valid JSON lines
